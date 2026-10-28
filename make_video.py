@@ -1,4 +1,4 @@
-import json, subprocess, time, requests
+import json, re, subprocess, sys, time, requests
 from urllib.parse import quote
 
 k = json.load(open("konu.json", encoding="utf-8"))
@@ -6,14 +6,45 @@ k = json.load(open("konu.json", encoding="utf-8"))
 def run(c):
     subprocess.run(c, check=True)
 
-# 1) Ses + altyazı (Edge TTS, ücretsiz)
-run(["edge-tts", "--voice", "tr-TR-AhmetNeural", "--rate=-5%",
-     "--text", k["senaryo"], "--write-media", "ses.mp3",
-     "--write-subtitles", "alt.vtt"])
-run(["ffmpeg", "-y", "-i", "alt.vtt", "alt.srt"])
-dur = float(subprocess.check_output(
-    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-     "-of", "csv=p=0", "ses.mp3"]))
+# 1) Ses + altyazı: önce Edge TTS, olmazsa Google gTTS
+def ssd(t):
+    return f"{int(t//3600):02d}:{int(t%3600//60):02d}:{int(t%60):02d},{int(t*1000)%1000:03d}"
+
+def sure(f):
+    return float(subprocess.check_output(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", f]))
+
+def edge():
+    try:
+        run(["edge-tts", "--voice", "tr-TR-AhmetNeural", "--text", k["senaryo"],
+             "--write-media", "ses.mp3", "--write-subtitles", "alt.vtt"])
+        run(["ffmpeg", "-y", "-i", "alt.vtt", "alt.srt"])
+        return True
+    except Exception as e:
+        print("Edge TTS olmadi, gTTS'e geciliyor:", e)
+        return False
+
+def gtts():
+    run([sys.executable, "-m", "pip", "install", "gTTS"])
+    from gtts import gTTS
+    cumleler = [c.strip() for c in re.split(r"(?<=[.?!])\s+", k["senaryo"]) if c.strip()]
+    t, srt, liste = 0.0, [], []
+    for i, c in enumerate(cumleler):
+        f = f"c{i}.mp3"
+        gTTS(c, lang="tr").save(f)
+        d = sure(f)
+        srt.append(f"{i+1}\n{ssd(t)} --> {ssd(t+d)}\n{c}\n")
+        liste.append(f"file '{f}'")
+        t += d
+    open("ses_liste.txt", "w").write("\n".join(liste))
+    open("alt.srt", "w", encoding="utf-8").write("\n".join(srt))
+    run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "ses_liste.txt",
+         "-c:a", "libmp3lame", "ses.mp3"])
+
+if not edge():
+    gtts()
+dur = sure("ses.mp3")
 
 # 2) Pollinations ile görsel üret (anahtar gerekmez) + yakınlaşma efekti
 STIL = ", cinematic, soft light, no people, no humans, no text, vertical"
